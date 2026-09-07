@@ -37,7 +37,7 @@ from tradingview_mcp.core.services.indicators_calc import (
     calc_supertrend, calc_donchian,
 )
 from tradingview_mcp.core.services.market_data import (
-    fetch_candles, validate_market_and_interval,
+    fetch_candles, validate_market_and_interval, validate_date_range,
 )
 
 _VALID_PERIODS = {"1mo", "3mo", "6mo", "1y", "2y"}
@@ -465,15 +465,21 @@ def run_backtest(
     include_trade_log: bool = False,
     include_equity_curve: bool = False,
     market: str = "stocks",
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
 ) -> dict:
     strategy = strategy.lower().strip()
     period   = period.lower().strip()
     interval = interval.lower().strip()
     market   = market.lower().strip()
+    has_date_range = bool(date_from and date_to)
 
     if strategy not in _STRATEGY_MAP:
         return {"error": f"Unknown strategy '{strategy}'. Choose: {', '.join(_STRATEGY_MAP)}"}
-    if period not in _VALID_PERIODS:
+    date_err = validate_date_range(date_from, date_to)
+    if date_err:
+        return {"error": date_err}
+    if not has_date_range and period not in _VALID_PERIODS:
         return {"error": f"Invalid period '{period}'. Choose: {', '.join(_VALID_PERIODS)}"}
     market_err = validate_market_and_interval(market, interval)
     if market_err:
@@ -484,7 +490,7 @@ def run_backtest(
         return {"error": num_err}
 
     try:
-        candles = fetch_candles(symbol, period, interval, market)
+        candles = fetch_candles(symbol, period, interval, market, date_from, date_to)
     except Exception as e:
         return {"error": f"Failed to fetch data for '{symbol}': {e}"}
 
@@ -507,7 +513,7 @@ def run_backtest(
         "strategy":                strategy,
         "strategy_label":          _STRATEGY_LABELS[strategy],
         "market":                  market,
-        "period":                  period,
+        "period":                  period if not has_date_range else None,
         "interval":                interval,
         "timeframe":               interval,
         "candles_analyzed":        len(candles),
@@ -544,13 +550,19 @@ def compare_strategies(
     slippage_pct: float = 0.05,
     interval: str = "1d",
     market: str = "stocks",
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
 ) -> dict:
     """Run all 9 strategies on one symbol."""
     period   = period.lower().strip()
     interval = interval.lower().strip()
     market   = market.lower().strip()
+    has_date_range = bool(date_from and date_to)
 
-    if period not in _VALID_PERIODS:
+    date_err = validate_date_range(date_from, date_to)
+    if date_err:
+        return {"error": date_err}
+    if not has_date_range and period not in _VALID_PERIODS:
         return {"error": f"Invalid period '{period}'. Choose: {', '.join(_VALID_PERIODS)}"}
     market_err = validate_market_and_interval(market, interval)
     if market_err:
@@ -561,7 +573,7 @@ def compare_strategies(
         return {"error": num_err}
 
     try:
-        candles = fetch_candles(symbol, period, interval, market)
+        candles = fetch_candles(symbol, period, interval, market, date_from, date_to)
     except Exception as e:
         return {"error": f"Failed to fetch data for '{symbol}': {e}"}
 
@@ -604,7 +616,7 @@ def compare_strategies(
     return {
         "symbol":                  symbol.upper(),
         "market":                  market,
-        "period":                  period,
+        "period":                  period if not has_date_range else None,
         "interval":                interval,
         "timeframe":               interval,
         "candles_analyzed":        len(candles),
@@ -636,6 +648,8 @@ def walk_forward_backtest(
     train_ratio: float = 0.7,
     interval: str = "1d",
     market: str = "stocks",
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
 ) -> dict:
     """
     Walk-forward backtesting — detect overfitting via train/test splits.
@@ -654,10 +668,14 @@ def walk_forward_backtest(
     period   = period.lower().strip()
     interval = interval.lower().strip()
     market   = market.lower().strip()
+    has_date_range = bool(date_from and date_to)
 
     if strategy not in _STRATEGY_MAP:
         return {"error": f"Unknown strategy '{strategy}'. Choose: {', '.join(_STRATEGY_MAP)}"}
-    if period not in _VALID_PERIODS:
+    date_err = validate_date_range(date_from, date_to)
+    if date_err:
+        return {"error": date_err}
+    if not has_date_range and period not in _VALID_PERIODS:
         return {"error": f"Invalid period '{period}'. Choose: {', '.join(_VALID_PERIODS)}"}
     market_err = validate_market_and_interval(market, interval)
     if market_err:
@@ -677,7 +695,7 @@ def walk_forward_backtest(
         return {"error": num_err}
 
     try:
-        candles = fetch_candles(symbol, period, interval, market)
+        candles = fetch_candles(symbol, period, interval, market, date_from, date_to)
     except Exception as e:
         return {"error": f"Failed to fetch data for '{symbol}': {e}"}
 
@@ -759,7 +777,7 @@ def walk_forward_backtest(
         "strategy":                strategy,
         "strategy_label":          _STRATEGY_LABELS[strategy],
         "market":                  market,
-        "period":                  period,
+        "period":                  period if not has_date_range else None,
         "interval":                interval,
         "timeframe":               interval,
         "total_candles":           len(candles),

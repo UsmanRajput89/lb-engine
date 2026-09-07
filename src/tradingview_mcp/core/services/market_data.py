@@ -80,14 +80,52 @@ def validate_market_and_interval(market: str, interval: str) -> Optional[str]:
     return None
 
 
-def fetch_candles(symbol: str, period: str, interval: str, market: str = "stocks") -> list[dict]:
-    """Single entry point backtest_service.py calls instead of hitting Yahoo directly."""
+def validate_date_range(date_from: Optional[str], date_to: Optional[str]) -> Optional[str]:
+    """Return an error message if date_from/date_to are malformed or inconsistent, else None.
+
+    Both must be given together (a lone one is ambiguous — is the other end
+    "today", or the period default?) and must parse as YYYY-MM-DD.
+    """
+    if date_from is None and date_to is None:
+        return None
+    if date_from is None or date_to is None:
+        return "date_from and date_to must be provided together."
+    try:
+        from_dt = datetime.strptime(date_from, "%Y-%m-%d")
+        to_dt = datetime.strptime(date_to, "%Y-%m-%d")
+    except ValueError:
+        return "date_from and date_to must be in YYYY-MM-DD format."
+    if to_dt <= from_dt:
+        return "date_to must be after date_from."
+    return None
+
+
+def _parse_date_range_ms(date_from: str, date_to: str) -> tuple[int, int]:
+    """date_to is treated as inclusive — end-of-day, not midnight."""
+    from_dt = datetime.strptime(date_from, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    to_dt = datetime.strptime(date_to, "%Y-%m-%d").replace(tzinfo=timezone.utc) + timedelta(days=1)
+    return int(from_dt.timestamp() * 1000), int(to_dt.timestamp() * 1000)
+
+
+def fetch_candles(
+    symbol: str,
+    period: str,
+    interval: str,
+    market: str = "stocks",
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+) -> list[dict]:
+    """Single entry point backtest_service.py calls instead of hitting Yahoo directly.
+
+    If date_from/date_to are given (both, validated by validate_date_range()),
+    they take precedence over `period` for every source below.
+    """
     if market in ("stocks", "forex", "crypto") and interval in _YAHOO_INTERVALS:
-        return _fetch_yahoo(symbol, period, interval)
+        return _fetch_yahoo(symbol, period, interval, date_from, date_to)
     if market == "crypto":
-        return _fetch_binance(symbol, period, interval)
+        return _fetch_binance(symbol, period, interval, date_from, date_to)
     if market == "forex":
-        return _fetch_oanda(symbol, period, interval)
+        return _fetch_oanda(symbol, period, interval, date_from, date_to)
     # market == "stocks" + intraday interval is already rejected by
     # validate_market_and_interval() before this is ever reached.
     raise ValueError(f"No data route for market={market!r} interval={interval!r}")
@@ -98,8 +136,19 @@ def fetch_candles(symbol: str, period: str, interval: str, market: str = "stocks
 _YF_BASE = "https://query1.finance.yahoo.com/v8/finance/chart"
 
 
-def _fetch_yahoo(symbol: str, period: str, interval: str = "1d") -> list[dict]:
-    url = f"{_YF_BASE}/{symbol}?interval={interval}&range={period}"
+def _fetch_yahoo(
+    symbol: str,
+    period: str,
+    interval: str = "1d",
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+) -> list[dict]:
+    if date_from and date_to:
+        period1_ms, period2_ms = _parse_date_range_ms(date_from, date_to)
+        range_param = f"period1={period1_ms // 1000}&period2={period2_ms // 1000}"
+    else:
+        range_param = f"range={period}"
+    url = f"{_YF_BASE}/{symbol}?interval={interval}&{range_param}"
     req = urllib.request.Request(url, headers={"User-Agent": _UA})
 
     data = None
@@ -156,11 +205,20 @@ def _normalize_binance_symbol(symbol: str) -> str:
     return symbol
 
 
-def _fetch_binance(symbol: str, period: str, interval: str) -> list[dict]:
+def _fetch_binance(
+    symbol: str,
+    period: str,
+    interval: str,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+) -> list[dict]:
     binance_symbol = _normalize_binance_symbol(symbol)
-    days = _PERIOD_TO_DAYS.get(period, 365)
-    end_ms = int(datetime.now(tz=timezone.utc).timestamp() * 1000)
-    start_ms = end_ms - days * 24 * 60 * 60 * 1000
+    if date_from and date_to:
+        start_ms, end_ms = _parse_date_range_ms(date_from, date_to)
+    else:
+        days = _PERIOD_TO_DAYS.get(period, 365)
+        end_ms = int(datetime.now(tz=timezone.utc).timestamp() * 1000)
+        start_ms = end_ms - days * 24 * 60 * 60 * 1000
 
     candles: list[dict] = []
     cursor = start_ms
@@ -236,7 +294,13 @@ def _oanda_base_url() -> str:
     return "https://api-fxpractice.oanda.com" if env != "live" else "https://api-fxtrade.oanda.com"
 
 
-def _fetch_oanda(symbol: str, period: str, interval: str) -> list[dict]:
+def _fetch_oanda(
+    symbol: str,
+    period: str,
+    interval: str,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+) -> list[dict]:
     api_key = os.environ.get("OANDA_API_KEY", "").strip()
     if not api_key:
         raise RuntimeError(
@@ -246,9 +310,14 @@ def _fetch_oanda(symbol: str, period: str, interval: str) -> list[dict]:
 
     instrument = _normalize_oanda_symbol(symbol)
     granularity = _OANDA_GRANULARITY[interval]
-    days = _PERIOD_TO_DAYS.get(period, 365)
-    end_dt = datetime.now(tz=timezone.utc)
-    start_dt = end_dt - timedelta(days=days)
+    if date_from and date_to:
+        start_ms, end_ms = _parse_date_range_ms(date_from, date_to)
+        start_dt = datetime.fromtimestamp(start_ms / 1000, tz=timezone.utc)
+        end_dt = datetime.fromtimestamp(end_ms / 1000, tz=timezone.utc)
+    else:
+        days = _PERIOD_TO_DAYS.get(period, 365)
+        end_dt = datetime.now(tz=timezone.utc)
+        start_dt = end_dt - timedelta(days=days)
 
     candles: list[dict] = []
     cursor = start_dt

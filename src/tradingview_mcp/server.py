@@ -661,6 +661,8 @@ def backtest_strategy(
     include_trade_log: bool = False,
     include_equity_curve: bool = False,
     market: str = "stocks",
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
 ) -> dict:
     """Backtest a trading strategy on historical data with institutional-grade metrics.
 
@@ -672,7 +674,7 @@ def backtest_strategy(
         strategy: rsi | bollinger | macd | ema_cross | supertrend | donchian
                   | rsi_pullback | keltner_breakout | triple_ema
                   (rsi_pullback and triple_ema need period >= '1y' for SMA200 warmup)
-        period: '1mo', '3mo', '6mo', '1y', '2y'
+        period: '1mo', '3mo', '6mo', '1y', '2y' — ignored if date_from/date_to given
         initial_capital: Starting capital in USD (default $10,000)
         commission_pct: Per-trade commission % (default 0.1%)
         slippage_pct: Per-trade slippage % (default 0.05%)
@@ -683,11 +685,15 @@ def backtest_strategy(
         include_trade_log: Include full per-trade log (default False)
         include_equity_curve: Include equity curve data points (default False)
         market: 'stocks' (default, Yahoo Finance) | 'forex' | 'crypto'
+        date_from: Exact start date 'YYYY-MM-DD' — must be given with date_to;
+                   overrides `period` when both are set
+        date_to: Exact end date 'YYYY-MM-DD' (inclusive) — must be given with date_from
     """
     return run_backtest(
         symbol, strategy, period, initial_capital,
         commission_pct, slippage_pct, interval,
         include_trade_log, include_equity_curve, market,
+        date_from, date_to,
     )
 
 
@@ -698,21 +704,28 @@ def compare_strategies(
     initial_capital: float = 10000.0,
     interval: str = "1d",
     market: str = "stocks",
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
 ) -> dict:
     """Run all 9 strategies (RSI, Bollinger, MACD, EMA Cross, Supertrend, Donchian, RSI Pullback, Keltner Breakout, Triple EMA) and return a ranked leaderboard.
 
     Args:
         symbol: Yahoo Finance symbol (AAPL, BTC-USD, SPY…) at 1d/1h; Binance/OANDA
                 formats also accepted for intraday crypto/forex
-        period: '1mo', '3mo', '6mo', '1y', '2y'
+        period: '1mo', '3mo', '6mo', '1y', '2y' — ignored if date_from/date_to given
                 (period >= '1y' recommended so rsi_pullback and triple_ema can
                  complete SMA200 warmup; otherwise they contribute zero trades)
         initial_capital: Starting capital in USD (default $10,000)
         interval: '1d' or '1h' for any market; '1m','5m','15m','30m','4h' also
                   work for market="crypto"/"forex" (see backtest_strategy for details)
         market: 'stocks' (default) | 'forex' | 'crypto'
+        date_from: Exact start date 'YYYY-MM-DD' — must be given with date_to
+        date_to: Exact end date 'YYYY-MM-DD' (inclusive) — must be given with date_from
     """
-    return _compare_strategies(symbol, period, initial_capital, interval=interval, market=market)
+    return _compare_strategies(
+        symbol, period, initial_capital, interval=interval, market=market,
+        date_from=date_from, date_to=date_to,
+    )
 
 
 @mcp.tool(annotations=ToolAnnotations(title="Walk-Forward Backtest", readOnlyHint=True, destructiveHint=False, openWorldHint=True))
@@ -727,6 +740,8 @@ def walk_forward_backtest_strategy(
     train_ratio: float = 0.7,
     interval: str = "1d",
     market: str = "stocks",
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
 ) -> dict:
     """Walk-forward backtest to detect overfitting — validates strategy on unseen data.
 
@@ -737,7 +752,8 @@ def walk_forward_backtest_strategy(
                   | keltner_breakout
                   (rsi_pullback and triple_ema not supported here — SMA200 warmup
                    exceeds typical fold size; use run_backtest with period='2y')
-        period: '1mo', '3mo', '6mo', '1y', '2y' (recommend '2y')
+        period: '1mo', '3mo', '6mo', '1y', '2y' (recommend '2y') — ignored if
+                date_from/date_to given
         initial_capital: Starting capital per fold in USD (default $10,000)
         commission_pct: Per-trade commission % (default 0.1%)
         slippage_pct: Per-trade slippage % (default 0.05%)
@@ -746,10 +762,13 @@ def walk_forward_backtest_strategy(
         interval: '1d' or '1h' for any market; '1m','5m','15m','30m','4h' also
                   work for market="crypto"/"forex" (see backtest_strategy for details)
         market: 'stocks' (default) | 'forex' | 'crypto'
+        date_from: Exact start date 'YYYY-MM-DD' — must be given with date_to
+        date_to: Exact end date 'YYYY-MM-DD' (inclusive) — must be given with date_from
     """
     return walk_forward_backtest(
         symbol, strategy, period, initial_capital,
         commission_pct, slippage_pct, n_splits, train_ratio, interval, market,
+        date_from, date_to,
     )
 
 

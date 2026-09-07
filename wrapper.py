@@ -43,6 +43,8 @@ class BacktestRequest(BaseModel):
     include_trade_log: bool = False
     include_equity_curve: bool = False
     market: str = "stocks"
+    date_from: Optional[str] = None
+    date_to: Optional[str] = None
 
 
 class CompareRequest(BaseModel):
@@ -53,6 +55,8 @@ class CompareRequest(BaseModel):
     slippage_pct: float = 0.05
     interval: str = "1d"
     market: str = "stocks"
+    date_from: Optional[str] = None
+    date_to: Optional[str] = None
 
 
 class WalkForwardRequest(BaseModel):
@@ -66,6 +70,8 @@ class WalkForwardRequest(BaseModel):
     train_ratio: float = 0.7
     interval: str = "1d"
     market: str = "stocks"
+    date_from: Optional[str] = None
+    date_to: Optional[str] = None
 
 
 @app.get("/health")
@@ -79,6 +85,7 @@ def backtest(req: BacktestRequest) -> dict:
         req.symbol, req.strategy, req.period, req.initial_capital,
         req.commission_pct, req.slippage_pct, req.interval,
         req.include_trade_log, req.include_equity_curve, req.market,
+        req.date_from, req.date_to,
     )
 
 
@@ -87,6 +94,7 @@ def compare(req: CompareRequest) -> dict:
     return compare_strategies(
         req.symbol, req.period, req.initial_capital,
         req.commission_pct, req.slippage_pct, req.interval, req.market,
+        req.date_from, req.date_to,
     )
 
 
@@ -96,6 +104,7 @@ def walk_forward(req: WalkForwardRequest) -> dict:
         req.symbol, req.strategy, req.period, req.initial_capital,
         req.commission_pct, req.slippage_pct, req.n_splits,
         req.train_ratio, req.interval, req.market,
+        req.date_from, req.date_to,
     )
 
 
