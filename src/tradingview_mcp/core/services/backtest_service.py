@@ -11,13 +11,24 @@ v0.7.0 additions:
   - Full trade log with per-trade detail
   - Equity curve data points
   - Walk-forward backtesting (overfitting detection)
+
+Long/short support (LB custom strategies):
+  A trade dict may set "direction": "short" when opening a position; costs,
+  metrics, trade log and equity curve all handle it correctly. Omitting
+  "direction" defaults to "long" (every built-in strategy above stays
+  unaffected). See _apply_costs() for the direction-aware P&L formula.
+
+Multi-source market data (LB):
+  Historical candles now come from market_data.fetch_candles(), which routes
+  to Yahoo Finance (default, unchanged), Binance (market="crypto" + an
+  intraday interval), or OANDA (market="forex" + an intraday interval) — see
+  market_data.py for the full routing table. Existing callers that don't pass
+  `market` keep hitting Yahoo exactly as before.
 """
 from __future__ import annotations
 
-import json
 import math
 import statistics
-import urllib.request
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -25,12 +36,11 @@ from tradingview_mcp.core.services.indicators_calc import (
     calc_rsi, calc_bollinger, calc_macd, calc_ema, calc_sma, calc_atr,
     calc_supertrend, calc_donchian,
 )
+from tradingview_mcp.core.services.market_data import (
+    fetch_candles, validate_market_and_interval,
+)
 
-_UA       = "tradingview-mcp/0.7.0 backtest-bot"
-_YF_BASE  = "https://query1.finance.yahoo.com/v8/finance/chart"
-
-_VALID_PERIODS   = {"1mo", "3mo", "6mo", "1y", "2y"}
-_VALID_INTERVALS = {"1d", "1h"}
+_VALID_PERIODS = {"1mo", "3mo", "6mo", "1y", "2y"}
 
 # Annualization factor for Sharpe ratio
 _ANNUALIZATION = {"1d": 252, "1h": 252 * 6}
@@ -51,48 +61,13 @@ _STRATEGY_LABELS = {
 _SMA200_STRATEGIES = {"rsi_pullback", "triple_ema"}
 _SMA200_MIN_BARS  = 220
 
+_YAHOO_ONLY_INTERVALS = {"1d", "1h"}
 
-# ─── Data Fetching ────────────────────────────────────────────────────────────
 
-def _fetch_ohlcv(symbol: str, period: str, interval: str = "1d") -> list[dict]:
-    url = f"{_YF_BASE}/{symbol}?interval={interval}&range={period}"
-    req = urllib.request.Request(url, headers={"User-Agent": _UA})
-
-    data = None
-    try:
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-    except Exception:
-        pass
-
-    if data is None:
-        try:
-            from tradingview_mcp.core.services.proxy_manager import build_opener_with_proxy
-            opener = build_opener_with_proxy(_UA)
-            with opener.open(url, timeout=18) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
-        except Exception as e:
-            raise RuntimeError(f"Both direct and proxy connections failed: {e}")
-
-    result     = data["chart"]["result"][0]
-    timestamps = result["timestamp"]
-    q          = result["indicators"]["quote"][0]
-    date_fmt   = "%Y-%m-%d %H:%M" if interval == "1h" else "%Y-%m-%d"
-
-    candles = []
-    for i, ts in enumerate(timestamps):
-        o, h, l, c, v = q["open"][i], q["high"][i], q["low"][i], q["close"][i], q["volume"][i]
-        if None in (o, h, l, c):
-            continue
-        candles.append({
-            "date":   datetime.fromtimestamp(ts, tz=timezone.utc).strftime(date_fmt),
-            "open":   round(o, 4),
-            "high":   round(h, 4),
-            "low":    round(l, 4),
-            "close":  round(c, 4),
-            "volume": v or 0,
-        })
-    return candles
+def _data_source_label(market: str, interval: str) -> str:
+    if interval in _YAHOO_ONLY_INTERVALS:
+        return "Yahoo Finance"
+    return "Binance" if market == "crypto" else "OANDA"
 
 
 # ─── Strategy Engines ─────────────────────────────────────────────────────────
@@ -296,12 +271,23 @@ _STRATEGY_MAP = {
 # ─── Transaction Costs ────────────────────────────────────────────────────────
 
 def _apply_costs(trades: list[dict], commission_pct: float, slippage_pct: float) -> list[dict]:
+    """Apply commission/slippage and compute gross return, direction-aware.
+
+    A trade without a "direction" key (all pre-existing long-only strategies)
+    defaults to "long" — this keeps every built-in strategy's output byte-for-byte
+    identical to before short support was added.
+    """
     total_cost_pct = (commission_pct + slippage_pct) * 2
     result = []
     for t in trades:
-        gross = (t["exit_price"] - t["entry_price"]) / t["entry_price"] * 100
-        net   = round(gross - total_cost_pct, 3)
-        result.append({**t, "return_pct": net, "gross_return_pct": round(gross, 3),
+        direction = t.get("direction", "long")
+        if direction == "short":
+            gross = (t["entry_price"] - t["exit_price"]) / t["entry_price"] * 100
+        else:
+            gross = (t["exit_price"] - t["entry_price"]) / t["entry_price"] * 100
+        net = round(gross - total_cost_pct, 3)
+        result.append({**t, "direction": direction, "return_pct": net,
+                        "gross_return_pct": round(gross, 3),
                         "cost_pct": round(-total_cost_pct, 3)})
     return result
 
@@ -324,6 +310,7 @@ def _build_trade_log(trades: list[dict], initial_capital: float) -> list[dict]:
             holding_days = None
         log.append({
             "trade_no":              i + 1,
+            "direction":             t.get("direction", "long"),
             "entry_date":            t["entry_date"],
             "entry_price":           t["entry_price"],
             "exit_date":             t["exit_date"],
@@ -419,8 +406,8 @@ def _calc_metrics(trades: list[dict], initial_capital: float, interval: str = "1
         "sharpe_ratio":     sharpe,
         "calmar_ratio":     calmar,
         "expectancy_pct":   expectancy,
-        "best_trade":       {k: best[k]  for k in ("entry_date", "exit_date", "return_pct")},
-        "worst_trade":      {k: worst[k] for k in ("entry_date", "exit_date", "return_pct")},
+        "best_trade":       {k: best[k]  for k in ("direction", "entry_date", "exit_date", "return_pct")},
+        "worst_trade":      {k: worst[k] for k in ("direction", "entry_date", "exit_date", "return_pct")},
     }
 
 
@@ -477,24 +464,27 @@ def run_backtest(
     interval: str = "1d",
     include_trade_log: bool = False,
     include_equity_curve: bool = False,
+    market: str = "stocks",
 ) -> dict:
     strategy = strategy.lower().strip()
     period   = period.lower().strip()
     interval = interval.lower().strip()
+    market   = market.lower().strip()
 
     if strategy not in _STRATEGY_MAP:
         return {"error": f"Unknown strategy '{strategy}'. Choose: {', '.join(_STRATEGY_MAP)}"}
     if period not in _VALID_PERIODS:
         return {"error": f"Invalid period '{period}'. Choose: {', '.join(_VALID_PERIODS)}"}
-    if interval not in _VALID_INTERVALS:
-        return {"error": f"Invalid interval '{interval}'. Choose: 1d or 1h"}
+    market_err = validate_market_and_interval(market, interval)
+    if market_err:
+        return {"error": market_err}
 
     num_err = _validate_numeric_inputs(initial_capital, commission_pct, slippage_pct)
     if num_err:
         return {"error": num_err}
 
     try:
-        candles = _fetch_ohlcv(symbol, period, interval)
+        candles = fetch_candles(symbol, period, interval, market)
     except Exception as e:
         return {"error": f"Failed to fetch data for '{symbol}': {e}"}
 
@@ -516,9 +506,10 @@ def run_backtest(
         "symbol":                  symbol.upper(),
         "strategy":                strategy,
         "strategy_label":          _STRATEGY_LABELS[strategy],
+        "market":                  market,
         "period":                  period,
         "interval":                interval,
-        "timeframe":               "Hourly (1h)" if interval == "1h" else "Daily (1d)",
+        "timeframe":               interval,
         "candles_analyzed":        len(candles),
         "date_from":               candles[0]["date"],
         "date_to":                 candles[-1]["date"],
@@ -529,7 +520,7 @@ def run_backtest(
         "buy_and_hold_return_pct": bnh,
         "vs_buy_and_hold_pct":     round(metrics["total_return_pct"] - bnh, 2),
         "recent_trades":           trades[-5:],
-        "data_source":             "Yahoo Finance",
+        "data_source":             _data_source_label(market, interval),
         "disclaimer":              "Past performance does not guarantee future results. For educational use only.",
         "timestamp":               datetime.now(timezone.utc).isoformat(),
     }
@@ -552,18 +543,25 @@ def compare_strategies(
     commission_pct: float = 0.1,
     slippage_pct: float = 0.05,
     interval: str = "1d",
+    market: str = "stocks",
 ) -> dict:
-    """Run all 6 strategies on one symbol. Supports 1d and 1h intervals."""
+    """Run all 9 strategies on one symbol."""
+    period   = period.lower().strip()
     interval = interval.lower().strip()
-    if interval not in _VALID_INTERVALS:
-        return {"error": f"Invalid interval '{interval}'. Choose: 1d or 1h"}
+    market   = market.lower().strip()
+
+    if period not in _VALID_PERIODS:
+        return {"error": f"Invalid period '{period}'. Choose: {', '.join(_VALID_PERIODS)}"}
+    market_err = validate_market_and_interval(market, interval)
+    if market_err:
+        return {"error": market_err}
 
     num_err = _validate_numeric_inputs(initial_capital, commission_pct, slippage_pct)
     if num_err:
         return {"error": num_err}
 
     try:
-        candles = _fetch_ohlcv(symbol, period, interval)
+        candles = fetch_candles(symbol, period, interval, market)
     except Exception as e:
         return {"error": f"Failed to fetch data for '{symbol}': {e}"}
 
@@ -605,9 +603,10 @@ def compare_strategies(
 
     return {
         "symbol":                  symbol.upper(),
+        "market":                  market,
         "period":                  period,
         "interval":                interval,
-        "timeframe":               "Hourly (1h)" if interval == "1h" else "Daily (1d)",
+        "timeframe":               interval,
         "candles_analyzed":        len(candles),
         "date_from":               candles[0]["date"],
         "date_to":                 candles[-1]["date"],
@@ -618,6 +617,7 @@ def compare_strategies(
         "winner":                  results[0]["strategy"] if results else None,
         "ranking":                 results,
         "warnings":                warnings,
+        "data_source":             _data_source_label(market, interval),
         "disclaimer":              "Past performance does not guarantee future results.",
         "timestamp":               datetime.now(timezone.utc).isoformat(),
     }
@@ -635,6 +635,7 @@ def walk_forward_backtest(
     n_splits: int = 3,
     train_ratio: float = 0.7,
     interval: str = "1d",
+    market: str = "stocks",
 ) -> dict:
     """
     Walk-forward backtesting — detect overfitting via train/test splits.
@@ -652,13 +653,15 @@ def walk_forward_backtest(
     strategy = strategy.lower().strip()
     period   = period.lower().strip()
     interval = interval.lower().strip()
+    market   = market.lower().strip()
 
     if strategy not in _STRATEGY_MAP:
         return {"error": f"Unknown strategy '{strategy}'. Choose: {', '.join(_STRATEGY_MAP)}"}
     if period not in _VALID_PERIODS:
         return {"error": f"Invalid period '{period}'. Choose: {', '.join(_VALID_PERIODS)}"}
-    if interval not in _VALID_INTERVALS:
-        return {"error": f"Invalid interval '{interval}'. Choose: 1d or 1h"}
+    market_err = validate_market_and_interval(market, interval)
+    if market_err:
+        return {"error": market_err}
     if not (2 <= n_splits <= 10):
         return {"error": "n_splits must be between 2 and 10"}
     if not (0.5 <= train_ratio <= 0.9):
@@ -674,7 +677,7 @@ def walk_forward_backtest(
         return {"error": num_err}
 
     try:
-        candles = _fetch_ohlcv(symbol, period, interval)
+        candles = fetch_candles(symbol, period, interval, market)
     except Exception as e:
         return {"error": f"Failed to fetch data for '{symbol}': {e}"}
 
@@ -755,9 +758,10 @@ def walk_forward_backtest(
         "symbol":                  symbol.upper(),
         "strategy":                strategy,
         "strategy_label":          _STRATEGY_LABELS[strategy],
+        "market":                  market,
         "period":                  period,
         "interval":                interval,
-        "timeframe":               "Hourly (1h)" if interval == "1h" else "Daily (1d)",
+        "timeframe":               interval,
         "total_candles":           len(candles),
         "n_splits":                n_splits,
         "train_ratio":             train_ratio,
@@ -777,7 +781,7 @@ def walk_forward_backtest(
         "initial_capital":         round(initial_capital, 2),
         "commission_pct":          commission_pct,
         "slippage_pct":            slippage_pct,
-        "data_source":             "Yahoo Finance",
+        "data_source":             _data_source_label(market, interval),
         "disclaimer":              "Past performance does not guarantee future results. For educational use only.",
         "timestamp":               datetime.now(timezone.utc).isoformat(),
     }

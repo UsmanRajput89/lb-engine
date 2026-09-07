@@ -660,11 +660,15 @@ def backtest_strategy(
     interval: str = "1d",
     include_trade_log: bool = False,
     include_equity_curve: bool = False,
+    market: str = "stocks",
 ) -> dict:
     """Backtest a trading strategy on historical data with institutional-grade metrics.
 
     Args:
-        symbol: Yahoo Finance symbol (AAPL, BTC-USD, THYAO.IS, ^GSPC)
+        symbol: Yahoo Finance symbol for market="stocks"/"forex"/"crypto" at 1d/1h
+                (AAPL, BTC-USD, EURUSD=X, THYAO.IS, ^GSPC); for intraday crypto/forex,
+                Binance ('BTCUSDT' or 'BTC-USD') / OANDA ('EUR_USD' or 'EURUSD=X') formats
+                also work
         strategy: rsi | bollinger | macd | ema_cross | supertrend | donchian
                   | rsi_pullback | keltner_breakout | triple_ema
                   (rsi_pullback and triple_ema need period >= '1y' for SMA200 warmup)
@@ -672,14 +676,18 @@ def backtest_strategy(
         initial_capital: Starting capital in USD (default $10,000)
         commission_pct: Per-trade commission % (default 0.1%)
         slippage_pct: Per-trade slippage % (default 0.05%)
-        interval: '1d' (daily) or '1h' (hourly)
+        interval: '1d' or '1h' for any market; '1m','5m','15m','30m','4h' also
+                  work for market="crypto" (via Binance) or market="forex" (via
+                  OANDA — needs OANDA_API_KEY configured). Not available for
+                  market="stocks" yet.
         include_trade_log: Include full per-trade log (default False)
         include_equity_curve: Include equity curve data points (default False)
+        market: 'stocks' (default, Yahoo Finance) | 'forex' | 'crypto'
     """
     return run_backtest(
         symbol, strategy, period, initial_capital,
         commission_pct, slippage_pct, interval,
-        include_trade_log, include_equity_curve,
+        include_trade_log, include_equity_curve, market,
     )
 
 
@@ -689,18 +697,22 @@ def compare_strategies(
     period: str = "1y",
     initial_capital: float = 10000.0,
     interval: str = "1d",
+    market: str = "stocks",
 ) -> dict:
     """Run all 9 strategies (RSI, Bollinger, MACD, EMA Cross, Supertrend, Donchian, RSI Pullback, Keltner Breakout, Triple EMA) and return a ranked leaderboard.
 
     Args:
-        symbol: Yahoo Finance symbol (AAPL, BTC-USD, SPY…)
+        symbol: Yahoo Finance symbol (AAPL, BTC-USD, SPY…) at 1d/1h; Binance/OANDA
+                formats also accepted for intraday crypto/forex
         period: '1mo', '3mo', '6mo', '1y', '2y'
                 (period >= '1y' recommended so rsi_pullback and triple_ema can
                  complete SMA200 warmup; otherwise they contribute zero trades)
         initial_capital: Starting capital in USD (default $10,000)
-        interval: '1d' (daily) or '1h' (hourly)
+        interval: '1d' or '1h' for any market; '1m','5m','15m','30m','4h' also
+                  work for market="crypto"/"forex" (see backtest_strategy for details)
+        market: 'stocks' (default) | 'forex' | 'crypto'
     """
-    return _compare_strategies(symbol, period, initial_capital, interval=interval)
+    return _compare_strategies(symbol, period, initial_capital, interval=interval, market=market)
 
 
 @mcp.tool(annotations=ToolAnnotations(title="Walk-Forward Backtest", readOnlyHint=True, destructiveHint=False, openWorldHint=True))
@@ -714,11 +726,13 @@ def walk_forward_backtest_strategy(
     n_splits: int = 3,
     train_ratio: float = 0.7,
     interval: str = "1d",
+    market: str = "stocks",
 ) -> dict:
     """Walk-forward backtest to detect overfitting — validates strategy on unseen data.
 
     Args:
-        symbol: Yahoo Finance symbol (AAPL, BTC-USD, SPY…)
+        symbol: Yahoo Finance symbol (AAPL, BTC-USD, SPY…) at 1d/1h; Binance/OANDA
+                formats also accepted for intraday crypto/forex
         strategy: rsi | bollinger | macd | ema_cross | supertrend | donchian
                   | keltner_breakout
                   (rsi_pullback and triple_ema not supported here — SMA200 warmup
@@ -729,11 +743,13 @@ def walk_forward_backtest_strategy(
         slippage_pct: Per-trade slippage % (default 0.05%)
         n_splits: Number of walk-forward folds (default 3, max 10)
         train_ratio: Fraction of each fold used for training (default 0.7)
-        interval: '1d' (daily) or '1h' (hourly)
+        interval: '1d' or '1h' for any market; '1m','5m','15m','30m','4h' also
+                  work for market="crypto"/"forex" (see backtest_strategy for details)
+        market: 'stocks' (default) | 'forex' | 'crypto'
     """
     return walk_forward_backtest(
         symbol, strategy, period, initial_capital,
-        commission_pct, slippage_pct, n_splits, train_ratio, interval,
+        commission_pct, slippage_pct, n_splits, train_ratio, interval, market,
     )
 
 

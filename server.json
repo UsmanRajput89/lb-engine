@@ -13,5 +13,29 @@
       "type": "streamable-http",
       "url": "https://mcp.cryptosieve.com/mcp"
     }
+  ],
+  "packages": [
+    {
+      "registryType": "pypi",
+      "identifier": "tradingview-mcp-server",
+      "version": "0.8.0",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "MARKETAUX_API_TOKEN",
+          "description": "Optional Marketaux API token for financial_news and market_sentiment",
+          "isRequired": false,
+          "isSecret": true
+        },
+        {
+          "name": "PROXY_ENABLED",
+          "description": "Set to false to disable optional Webshare proxy",
+          "isRequired": false,
+          "default": "false"
+        }
+      ]
+    }
   ]
 }
