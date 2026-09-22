@@ -28,6 +28,7 @@ from tradingview_mcp.core.services.backtest_service import (
     compare_strategies,
     walk_forward_backtest,
 )
+from tradingview_mcp.core.services.signal_service import get_signal_state
 
 app = FastAPI(title="lb-engine REST wrapper", version="0.1.0")
 
@@ -74,6 +75,14 @@ class WalkForwardRequest(BaseModel):
     date_to: Optional[str] = None
 
 
+class SignalStateRequest(BaseModel):
+    symbol: str
+    strategy: str
+    interval: str = "4h"
+    market: str = "crypto"
+    as_of: Optional[str] = None
+
+
 @app.get("/health")
 def health() -> dict:
     return {"status": "ok"}
@@ -106,6 +115,11 @@ def walk_forward(req: WalkForwardRequest) -> dict:
         req.train_ratio, req.interval, req.market,
         req.date_from, req.date_to,
     )
+
+
+@app.post("/signal-state")
+def signal_state(req: SignalStateRequest) -> dict:
+    return get_signal_state(req.symbol, req.strategy, req.interval, req.market, req.as_of)
 
 
 if __name__ == "__main__":

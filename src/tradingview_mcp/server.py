@@ -671,9 +671,9 @@ def backtest_strategy(
                 (AAPL, BTC-USD, EURUSD=X, THYAO.IS, ^GSPC); for intraday crypto/forex,
                 Binance ('BTCUSDT' or 'BTC-USD') / OANDA ('EUR_USD' or 'EURUSD=X') formats
                 also work
-        strategy: rsi | bollinger | macd | ema_cross | supertrend | donchian
-                  | rsi_pullback | keltner_breakout | triple_ema
-                  (rsi_pullback and triple_ema need period >= '1y' for SMA200 warmup)
+        strategy: macd | ema_cross | supertrend | donchian
+                  | keltner_breakout | triple_ema
+                  (triple_ema needs period >= '1y' for SMA200 warmup)
         period: '1mo', '3mo', '6mo', '1y', '2y' — ignored if date_from/date_to given
         initial_capital: Starting capital in USD (default $10,000)
         commission_pct: Per-trade commission % (default 0.1%)
@@ -713,8 +713,8 @@ def compare_strategies(
         symbol: Yahoo Finance symbol (AAPL, BTC-USD, SPY…) at 1d/1h; Binance/OANDA
                 formats also accepted for intraday crypto/forex
         period: '1mo', '3mo', '6mo', '1y', '2y' — ignored if date_from/date_to given
-                (period >= '1y' recommended so rsi_pullback and triple_ema can
-                 complete SMA200 warmup; otherwise they contribute zero trades)
+                (period >= '1y' recommended so triple_ema can
+                 complete SMA200 warmup; otherwise it contributes zero trades)
         initial_capital: Starting capital in USD (default $10,000)
         interval: '1d' or '1h' for any market; '1m','5m','15m','30m','4h' also
                   work for market="crypto"/"forex" (see backtest_strategy for details)
@@ -748,9 +748,9 @@ def walk_forward_backtest_strategy(
     Args:
         symbol: Yahoo Finance symbol (AAPL, BTC-USD, SPY…) at 1d/1h; Binance/OANDA
                 formats also accepted for intraday crypto/forex
-        strategy: rsi | bollinger | macd | ema_cross | supertrend | donchian
+        strategy: macd | ema_cross | supertrend | donchian
                   | keltner_breakout
-                  (rsi_pullback and triple_ema not supported here — SMA200 warmup
+                  (triple_ema not supported here — SMA200 warmup
                    exceeds typical fold size; use run_backtest with period='2y')
         period: '1mo', '3mo', '6mo', '1y', '2y' (recommend '2y') — ignored if
                 date_from/date_to given

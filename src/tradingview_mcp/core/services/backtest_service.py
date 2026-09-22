@@ -4,7 +4,8 @@ Backtesting Service for tradingview-mcp — v3 (v0.7.0)
 Pure Python — no pandas, no numpy, no external backtesting libraries.
 
 Supported strategies (6):
-  rsi, bollinger, macd, ema_cross, supertrend, donchian
+  macd, ema_cross, supertrend, donchian, keltner_breakout, triple_ema
+  (rsi, bollinger, rsi_pullback removed 2026-09: failed cost-adjusted scan on 9 coins x 4 timeframes)
 
 v0.7.0 additions:
   - 1h (hourly) timeframe support
@@ -33,7 +34,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from tradingview_mcp.core.services.indicators_calc import (
-    calc_rsi, calc_bollinger, calc_macd, calc_ema, calc_sma, calc_atr,
+    calc_macd, calc_ema, calc_sma, calc_atr,
     calc_supertrend, calc_donchian,
 )
 from tradingview_mcp.core.services.market_data import (
@@ -46,19 +47,16 @@ _VALID_PERIODS = {"1mo", "3mo", "6mo", "1y", "2y"}
 _ANNUALIZATION = {"1d": 252, "1h": 252 * 6}
 
 _STRATEGY_LABELS = {
-    "rsi":              "RSI Oversold/Overbought",
-    "bollinger":        "Bollinger Band Mean Reversion",
     "macd":             "MACD Crossover",
     "ema_cross":        "EMA 20/50 Golden/Death Cross",
     "supertrend":       "Supertrend (ATR-based Trend Following)",
     "donchian":         "Donchian Channel Breakout",
-    "rsi_pullback":     "RSI Pullback in Uptrend (SMA50>SMA200)",
     "keltner_breakout": "Keltner Channel Breakout (EMA20 + 2·ATR)",
     "triple_ema":       "EMA 20/50 Cross with SMA200 Trend Filter",
 }
 
 # Strategies that require SMA200 warmup → need ≥220 bars to produce signals
-_SMA200_STRATEGIES = {"rsi_pullback", "triple_ema"}
+_SMA200_STRATEGIES = {"triple_ema"}
 _SMA200_MIN_BARS  = 220
 
 _YAHOO_ONLY_INTERVALS = {"1d", "1h"}
@@ -72,39 +70,7 @@ def _data_source_label(market: str, interval: str) -> str:
 
 # ─── Strategy Engines ─────────────────────────────────────────────────────────
 
-def _run_rsi(candles, oversold=40, overbought=60, period=14, **_):
-    closes = [c["close"] for c in candles]
-    rsi    = calc_rsi(closes, period)
-    trades, position = [], None
-    for i in range(1, len(candles)):
-        if rsi[i] is None:
-            continue
-        price, date = candles[i]["close"], candles[i]["date"]
-        if position is None and rsi[i] < oversold:
-            position = {"entry_date": date, "entry_price": price, "strategy": "rsi"}
-        elif position is not None and rsi[i] > overbought:
-            trades.append({**position, "exit_date": date, "exit_price": price})
-            position = None
-    return trades
-
-
-def _run_bollinger(candles, period=20, std_mult=2.0, **_):
-    closes = [c["close"] for c in candles]
-    bb     = calc_bollinger(closes, period, std_mult)
-    trades, position = [], None
-    for i in range(1, len(candles)):
-        if bb["lower"][i] is None:
-            continue
-        price, date = candles[i]["close"], candles[i]["date"]
-        if position is None and price < bb["lower"][i]:
-            position = {"entry_date": date, "entry_price": price, "strategy": "bollinger"}
-        elif position is not None and price > bb["middle"][i]:
-            trades.append({**position, "exit_date": date, "exit_price": price})
-            position = None
-    return trades
-
-
-def _run_macd(candles, fast=12, slow=26, signal=9, **_):
+def _run_macd(candles, fast=12, slow=26, signal=9, _open_out=None, **_):
     closes = [c["close"] for c in candles]
     macd   = calc_macd(closes, fast, slow, signal)
     trades, position = [], None
@@ -118,10 +84,12 @@ def _run_macd(candles, fast=12, slow=26, signal=9, **_):
         elif position is not None and mp > sp and m <= s:
             trades.append({**position, "exit_date": date, "exit_price": price})
             position = None
+    if _open_out is not None:
+        _open_out["position"] = position
     return trades
 
 
-def _run_ema_cross(candles, fast_period=20, slow_period=50, **_):
+def _run_ema_cross(candles, fast_period=20, slow_period=50, _open_out=None, **_):
     closes   = [c["close"] for c in candles]
     ema_fast = calc_ema(closes, fast_period)
     ema_slow = calc_ema(closes, slow_period)
@@ -136,10 +104,12 @@ def _run_ema_cross(candles, fast_period=20, slow_period=50, **_):
         elif position is not None and fp > sp and f <= s:
             trades.append({**position, "exit_date": date, "exit_price": price})
             position = None
+    if _open_out is not None:
+        _open_out["position"] = position
     return trades
 
 
-def _run_supertrend(candles, atr_period=10, multiplier=3.0, **_):
+def _run_supertrend(candles, atr_period=10, multiplier=3.0, _open_out=None, **_):
     highs  = [c["high"]  for c in candles]
     lows   = [c["low"]   for c in candles]
     closes = [c["close"] for c in candles]
@@ -155,10 +125,12 @@ def _run_supertrend(candles, atr_period=10, multiplier=3.0, **_):
         elif position is not None and dp == 1 and d == -1:
             trades.append({**position, "exit_date": date, "exit_price": price})
             position = None
+    if _open_out is not None:
+        _open_out["position"] = position
     return trades
 
 
-def _run_donchian(candles, period=20, **_):
+def _run_donchian(candles, period=20, _open_out=None, **_):
     highs  = [c["high"] for c in candles]
     lows   = [c["low"]  for c in candles]
     dc     = calc_donchian(highs, lows, period)
@@ -175,35 +147,12 @@ def _run_donchian(candles, period=20, **_):
         elif position is not None and lows[i] < dc["lower"][i - 1]:
             trades.append({**position, "exit_date": date, "exit_price": price})
             position = None
+    if _open_out is not None:
+        _open_out["position"] = position
     return trades
 
 
-def _run_rsi_pullback(candles, rsi_period=14, oversold=40, overbought=70,
-                       fast_ma=50, slow_ma=200, **_):
-    """Dip-buy in confirmed uptrend.
-
-    Entry: SMA(fast_ma) > SMA(slow_ma)  AND  RSI < oversold
-    Exit:  RSI > overbought              OR   close < SMA(fast_ma)
-    """
-    closes   = [c["close"] for c in candles]
-    rsi      = calc_rsi(closes, rsi_period)
-    sma_fast = calc_sma(closes, fast_ma)
-    sma_slow = calc_sma(closes, slow_ma)
-    trades, position = [], None
-    for i in range(1, len(candles)):
-        if rsi[i] is None or sma_fast[i] is None or sma_slow[i] is None:
-            continue
-        price, date = candles[i]["close"], candles[i]["date"]
-        in_uptrend  = sma_fast[i] > sma_slow[i]
-        if position is None and in_uptrend and rsi[i] < oversold:
-            position = {"entry_date": date, "entry_price": price, "strategy": "rsi_pullback"}
-        elif position is not None and (rsi[i] > overbought or price < sma_fast[i]):
-            trades.append({**position, "exit_date": date, "exit_price": price})
-            position = None
-    return trades
-
-
-def _run_keltner_breakout(candles, ema_period=20, atr_period=14, multiplier=2.0, **_):
+def _run_keltner_breakout(candles, ema_period=20, atr_period=14, multiplier=2.0, _open_out=None, **_):
     """ATR-normalized breakout (volatility-aware Donchian alternative).
 
     Upper = EMA(20) + multiplier · ATR(14)
@@ -226,10 +175,12 @@ def _run_keltner_breakout(candles, ema_period=20, atr_period=14, multiplier=2.0,
         elif position is not None and price < ema[i]:
             trades.append({**position, "exit_date": date, "exit_price": price})
             position = None
+    if _open_out is not None:
+        _open_out["position"] = position
     return trades
 
 
-def _run_triple_ema(candles, fast_period=20, slow_period=50, trend_period=200, **_):
+def _run_triple_ema(candles, fast_period=20, slow_period=50, trend_period=200, _open_out=None, **_):
     """EMA 20/50 cross gated by long-term trend filter.
 
     Entry: EMA(20) crosses ABOVE EMA(50)  AND  close > SMA(200)
@@ -252,17 +203,16 @@ def _run_triple_ema(candles, fast_period=20, slow_period=50, trend_period=200, *
         elif position is not None and bear_cross:
             trades.append({**position, "exit_date": date, "exit_price": price})
             position = None
+    if _open_out is not None:
+        _open_out["position"] = position
     return trades
 
 
 _STRATEGY_MAP = {
-    "rsi":              _run_rsi,
-    "bollinger":        _run_bollinger,
     "macd":             _run_macd,
     "ema_cross":        _run_ema_cross,
     "supertrend":       _run_supertrend,
     "donchian":         _run_donchian,
-    "rsi_pullback":     _run_rsi_pullback,
     "keltner_breakout": _run_keltner_breakout,
     "triple_ema":       _run_triple_ema,
 }
@@ -553,7 +503,7 @@ def compare_strategies(
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
 ) -> dict:
-    """Run all 9 strategies on one symbol."""
+    """Run all built-in strategies on one symbol."""
     period   = period.lower().strip()
     interval = interval.lower().strip()
     market   = market.lower().strip()

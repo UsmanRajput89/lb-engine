@@ -54,13 +54,13 @@ def test_cost_boundaries_inclusive():
 # ─── boundary: public API returns error before any network call ───────────────
 
 def test_run_backtest_rejects_bad_capital_offline():
-    out = run_backtest("BTC-USD", "rsi", period="1y", interval="1d",
+    out = run_backtest("BTC-USD", "macd", period="1y", interval="1d",
                        initial_capital=0.0)
     assert "error" in out and "initial_capital" in out["error"]
 
 
 def test_walk_forward_rejects_negative_commission_offline():
-    out = walk_forward_backtest("BTC-USD", "rsi", period="2y", interval="1d",
+    out = walk_forward_backtest("BTC-USD", "macd", period="2y", interval="1d",
                                 commission_pct=-0.1)
     assert "error" in out and "commission_pct" in out["error"]
 
